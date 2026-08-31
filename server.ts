@@ -43,12 +43,11 @@ async function generateWithGemini(params: {
   const ai = getGeminiClient();
   if (!ai) return null;
 
-  // Prioritize stable, high-availability production models
+  // Prioritize stable, officially supported models in order
   const candidateModels = [
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-2.5-pro'
+    'gemini-3.7-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite'
   ];
 
   for (const model of candidateModels) {
@@ -337,6 +336,37 @@ Return a strict JSON object following this structure:
 // ==========================================
 // 2. PRACTICAL ASSESSMENT EVALUATION ENDPOINT
 // ==========================================
+
+/**
+ * Validates whether candidate submission text is meaningful or junk/empty/gibberish.
+ */
+function analyzeSubmissionSubstance(answers: Array<{ question: string; answerText: string }>, files: any[] = []) {
+  const combinedText = answers.map(a => (a.answerText || '').trim()).join(' ');
+  const words = combinedText.split(/\s+/).filter(w => w.length > 0);
+  const totalLength = combinedText.length;
+
+  if (totalLength === 0 || words.length === 0) {
+    return { isInvalid: true, reason: 'blank', score: 0, wordCount: 0 };
+  }
+
+  // Check for short dismissive / junk phrases
+  const junkRegex = /^(rubbish|junk|test|testing|asdf|asdfgh|qwerty|zxcv|1234|idk|i don'?t know|nothing|none|n\/a|na|no idea|skip|bla|blah|xyz|null|empty|\?+|\.+)$/i;
+  const meaningfulAnswers = answers.filter(a => {
+    const text = (a.answerText || '').trim();
+    return text.length >= 8 && !junkRegex.test(text);
+  });
+
+  // Check for repeated character mashing (e.g. "aaaaa", "asdfasdfasdf", "zzzzzzzz")
+  const hasKeyboardMash = /(.)\1{5,}/.test(combinedText) || 
+    /^[asdfghjklqwertyuiopzxcvbnm1234567890\s.,!?]{1,30}$/i.test(combinedText) && words.length < 5;
+
+  if (words.length < 5 || meaningfulAnswers.length === 0 || (hasKeyboardMash && words.length < 8)) {
+    return { isInvalid: true, reason: 'gibberish_or_minimal', score: 0, wordCount: words.length };
+  }
+
+  return { isInvalid: false, reason: 'valid', score: 0, wordCount: words.length, meaningfulCount: meaningfulAnswers.length };
+}
+
 app.post('/api/assessment/evaluate', async (req: Request, res: Response) => {
   try {
     const { assessment, answers, files = [], timeSpentSeconds = 60, userSkills = [] } = req.body;
@@ -345,10 +375,51 @@ app.post('/api/assessment/evaluate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required assessment submission data.' });
     }
 
+    const substance = analyzeSubmissionSubstance(answers, files);
+
+    // Fast-path: Strict rejection of blank, gibberish, or dismissive non-answers
+    if (substance.isInvalid) {
+      return res.json({
+        success: true,
+        source: 'strict_validator',
+        evaluation: {
+          overallScore: 0,
+          technicalAccuracy: 0,
+          problemSolving: 0,
+          practicalApplication: 0,
+          reasoning: 0,
+          communication: 0,
+          strengths: [
+            'No valid technical content submitted in this attempt.'
+          ],
+          weaknesses: [
+            'Prompt questions were left blank, incomplete, or filled with placeholder/non-technical text.',
+            'Did not provide root-cause analysis, system telemetry diagnostics, or remediation steps.'
+          ],
+          specificFeedback: `Your submission received an overall score of 0% because it did not contain meaningful technical answers addressing "${assessment.title}". In professional engineering and technical incident environments, candidates are expected to demonstrate structured troubleshooting, code/configuration fixes, and telemetry analysis. Please review the scenario background and resubmit a thoughtful response.`,
+          skillScoreUpdates: (assessment.skillsAssessed || []).map((s: string) => {
+            const existingSkill = (userSkills || []).find((us: any) => us.name?.toLowerCase() === s.toLowerCase());
+            const currentLevel = existingSkill ? existingSkill.currentLevel : 4;
+            return {
+              skillName: s,
+              previousScore: currentLevel,
+              newScore: currentLevel,
+              delta: 0,
+              rationale: `No competency points awarded (Submission was blank or invalid).`
+            };
+          }),
+          nextSkillFocus: assessment.skillsAssessed?.[0] || 'Technical Incident Response',
+          recommendedNextChallengeTitle: `Re-attempt: ${assessment.title}`,
+          recommendedNextChallengeDescription: 'Revisit the scenario logs and submit structured technical explanations to earn competency advancement.'
+        }
+      });
+    }
+
     const formattedAnswers = answers.map((a, i) => `Q${i + 1} (${a.question}):\nAnswer: ${a.answerText}`).join('\n\n');
     const formattedFiles = files.map((f: any) => `File: ${f.name} (${f.type}, ${f.size} bytes)\nContent Snippet: ${f.contentSnippet || 'Binary/Uploaded'}`).join('\n\n');
 
     const prompt = `You are a Principal Engineering Interviewer and Staff Assessor evaluating a candidate's real submission for the following Practical Assessment.
+Grade with authentic industry rigor like a Staff Engineer at Google/Meta.
 
 ASSESSMENT TITLE: ${assessment.title}
 TARGET ROLE: ${assessment.targetRole}
@@ -364,36 +435,39 @@ ${formattedAnswers}
 Uploaded Files / Artifacts:
 ${formattedFiles || 'None'}
 
-EVALUATION RULES:
-1. Grade strictly based on what the candidate actually wrote and submitted.
-2. If they correctly identified nuances in logs/code, give credit.
-3. If they missed critical considerations, state clearly what was missed.
-4. Calculate category scores (0-100) and an overall score (0-100).
-5. For each assessed skill (${assessment.skillsAssessed?.join(', ')}), specify the new level (1-10) and score delta with rationale.
+STRICT GRADING RULES:
+1. Grade ONLY what the candidate actually wrote. Never hallucinate answers or invent knowledge they didn't demonstrate.
+2. If answers are brief, vague, or superficial hand-waving without concrete technical depth, score LOW (20-45%).
+3. If answers are partially correct but miss key edge cases, configuration details, or root causes, score (46-65%).
+4. If answers are solid, structured, and practically sound, score (66-84%).
+5. Award 85%+ ONLY for comprehensive, production-grade responses with clear code/config, automated safeguards, and root cause mitigation.
+6. Skill Score Delta Rules:
+   - If overallScore < 60: delta MUST be 0 (no skill score increase, newScore equals previousScore).
+   - If overallScore is 60-74: delta can be 1.
+   - If overallScore >= 75: delta can be 1 or 2.
 
 Return a strict JSON object:
 {
-  "overallScore": 82,
-  "technicalAccuracy": 85,
-  "problemSolving": 80,
-  "practicalApplication": 80,
-  "reasoning": 84,
-  "communication": 82,
+  "overallScore": 0, // 0-100 integer based on actual technical merit
+  "technicalAccuracy": 0, // 0-100
+  "problemSolving": 0, // 0-100
+  "practicalApplication": 0, // 0-100
+  "reasoning": 0, // 0-100
+  "communication": 0, // 0-100
   "strengths": [
-    "Specific observation 1 referencing candidate text",
-    "Specific observation 2"
+    "Specific observation 1 referencing candidate text (or 'Limited strengths observed' if poor)"
   ],
   "weaknesses": [
-    "Specific gap 1 missed by the candidate",
-    "Specific gap 2"
+    "Specific technical gap 1 missed by the candidate",
+    "Specific technical gap 2"
   ],
   "specificFeedback": "2-3 paragraphs of actionable, constructive critique directly addressing their approach.",
   "skillScoreUpdates": [
     {
       "skillName": "Skill Name",
       "previousScore": 5,
-      "newScore": 7,
-      "delta": 2,
+      "newScore": 5,
+      "delta": 0,
       "rationale": "Why score adjusted based on submission"
     }
   ],
@@ -411,6 +485,14 @@ Return a strict JSON object:
     if (rawResponse) {
       try {
         const parsed = JSON.parse(rawResponse);
+        // Ensure deltas are 0 if score is low
+        if (parsed.overallScore < 60 && parsed.skillScoreUpdates) {
+          parsed.skillScoreUpdates = parsed.skillScoreUpdates.map((u: any) => ({
+            ...u,
+            delta: 0,
+            newScore: u.previousScore
+          }));
+        }
         return res.json({
           success: true,
           source: 'gemini_ai',
@@ -421,41 +503,80 @@ Return a strict JSON object:
       }
     }
 
-    // High-precision deterministic scoring fallback
-    const totalWords = answers.reduce((sum: number, a: any) => sum + (a.answerText?.split(/\s+/).length || 0), 0);
-    const hasFiles = files.length > 0;
-    const baseScore = Math.min(95, Math.max(62, Math.round(58 + (totalWords > 100 ? 26 : totalWords * 0.25) + (hasFiles ? 6 : 0))));
+    // Rigorous Deterministic Grading Engine
+    const totalWords = substance.wordCount;
+    const answeredPrompts = answers.filter(a => (a.answerText || '').trim().length > 20).length;
+    const totalPrompts = answers.length || 1;
+    const promptCompletionRatio = answeredPrompts / totalPrompts;
+
+    // Technical term matching based on role and skills
+    const combinedLower = answers.map(a => (a.answerText || '').toLowerCase()).join(' ');
+    const domainKeywords = [
+      'log', 'latency', 'memory', 'cpu', 'database', 'index', 'query', 'cache', 'redis',
+      'docker', 'container', 'kubernetes', 'cluster', 'timeout', 'retry', 'circuit breaker',
+      'schema', 'validation', 'drift', 'mlops', 'fastapi', 'async', 'thread', 'lock',
+      'pipeline', 'rollback', 'canary', 'telemetry', 'prometheus', 'alert', 'root cause',
+      'mitigation', 'patch', 'regression', 'health check', 'load balancer', 'connection pool'
+    ];
+    const matchedDomainKeywords = domainKeywords.filter(k => combinedLower.includes(k));
+
+    let calculatedScore = 0;
+    if (totalWords < 25 || promptCompletionRatio < 0.25) {
+      calculatedScore = Math.min(28, Math.round(totalWords * 0.8));
+    } else {
+      const depthScore = Math.min(40, (totalWords / 150) * 40);
+      const keywordScore = Math.min(30, (matchedDomainKeywords.length / 6) * 30);
+      const completionScore = promptCompletionRatio * 20;
+      const fileBonus = files.length > 0 ? 5 : 0;
+      calculatedScore = Math.min(88, Math.max(15, Math.round(depthScore + keywordScore + completionScore + fileBonus)));
+    }
+
+    const passed = calculatedScore >= 60;
+    const delta = passed ? (calculatedScore >= 80 ? 2 : 1) : 0;
 
     return res.json({
       success: true,
       source: 'deterministic_engine',
       evaluation: {
-        overallScore: baseScore,
-        technicalAccuracy: Math.min(100, baseScore + 2),
-        problemSolving: Math.max(50, baseScore - 1),
-        practicalApplication: baseScore,
-        reasoning: Math.min(100, baseScore + 1),
-        communication: Math.min(100, baseScore + 4),
-        strengths: [
-          `Addressed core scenario criteria for ${assessment.title} with solid technical framing.`,
-          'Structured troubleshooting steps in clear, logical sequence.',
-          ...(hasFiles ? ['Included supplementary artifacts and configuration evidence.'] : [])
+        overallScore: calculatedScore,
+        technicalAccuracy: Math.min(100, calculatedScore + 2),
+        problemSolving: Math.max(10, calculatedScore - 2),
+        practicalApplication: calculatedScore,
+        reasoning: Math.min(100, calculatedScore + 1),
+        communication: Math.min(100, Math.max(20, Math.round(totalWords * 0.5))),
+        strengths: passed ? [
+          `Addressed ${answeredPrompts} of ${totalPrompts} questions with relevant technical terminology.`,
+          `Referenced domain concepts: ${matchedDomainKeywords.slice(0, 3).join(', ') || 'Incident remediation'}.`
+        ] : [
+          'Attempted to outline a response, but lacked technical depth and root-cause analysis.'
         ],
         weaknesses: [
-          'Could define more explicit automated health-check thresholds and canary metrics.',
-          'Consider detailing post-mortem root-cause mitigation in CI/CD pipeline tests.'
+          `Addressed only ${answeredPrompts}/${totalPrompts} questions in full technical detail.`,
+          'Needs more explicit configuration benchmarks, automated regression checks, and telemetry thresholds.'
         ],
-        specificFeedback: `Your submission for "${assessment.title}" demonstrated sound analytical capabilities. You identified the primary operational challenges and proposed clear remediation steps. For senior-level readiness, deepen your telemetry instrumentation and automated regression verification.`,
-        skillScoreUpdates: (assessment.skillsAssessed || ['System Architecture']).map((s: string) => ({
-          skillName: s,
-          previousScore: 5,
-          newScore: Math.min(10, Math.max(6, Math.round(baseScore / 10))),
-          delta: 1,
-          rationale: `Demonstrated practical competency during ${assessment.title}.`
-        })),
+        specificFeedback: passed 
+          ? `Your submission for "${assessment.title}" demonstrated solid technical awareness with an evaluated score of ${calculatedScore}%. You correctly identified key operational considerations. To achieve senior Staff-level mastery, deepen your root-cause telemetry instrumentation and automated rollback assertions.`
+          : `Your submission for "${assessment.title}" received a score of ${calculatedScore}% (below passing threshold of 60%). The explanation was too brief or lacked sufficient technical depth and code/configuration fixes. Please review the scenario artifacts and re-attempt.`,
+        skillScoreUpdates: (assessment.skillsAssessed || ['System Architecture']).map((s: string) => {
+          const existingSkill = (userSkills || []).find((us: any) => us.name?.toLowerCase() === s.toLowerCase());
+          const currentLevel = existingSkill ? existingSkill.currentLevel : 5;
+          return {
+            skillName: s,
+            previousScore: currentLevel,
+            newScore: currentLevel + delta,
+            delta,
+            rationale: passed 
+              ? `Demonstrated applied competency in ${assessment.title} (Scored ${calculatedScore}%).`
+              : `No skill increase awarded. Score (${calculatedScore}%) was below passing criteria.`
+          };
+        }),
         nextSkillFocus: assessment.skillsAssessed?.[0] || 'System Architecture',
-        recommendedNextChallengeTitle: `Advanced ${assessment.skillsAssessed?.[0] || 'Engineering'} Production Incident`,
-        recommendedNextChallengeDescription: 'Continue building depth in production troubleshooting and infrastructure resilience.'
+        recommendedNextChallengeTitle: passed
+          ? `Advanced ${assessment.skillsAssessed?.[0] || 'Engineering'} Production Incident`
+          : `Re-attempt: ${assessment.title}`,
+        recommendedNextChallengeDescription: passed
+          ? 'Continue building depth in production troubleshooting and infrastructure resilience.'
+          : 'Refine your root-cause analysis and code implementations to pass the assessment.'
       }
     });
   } catch (error: any) {
@@ -480,45 +601,99 @@ app.post('/api/coach/chat', async (req: Request, res: Response) => {
     const skillsContext = skills.map((s: any) => `${s.name}: Level ${s.currentLevel}/10 (Req: ${s.requiredLevel}/10, Confidence: ${s.confidence})`).join(', ');
     const recentAssessments = recentSubmissions.map((sub: any) => `${sub.assessmentTitle} (Score: ${sub.evaluation?.overallScore || 'N/A'}%)`).join('; ');
 
-    const systemInstruction = `You are the SkillForge AI Career Coach. You are an expert technical mentor, hiring manager, and practical career strategist.
-You are interacting with a candidate who has target role: "${targetRole}".
+    const systemInstruction = `You are the SkillForge AI Career Coach, a world-class technical mentor, Staff Engineer, and career strategist.
+You are directly advising a candidate whose target role is "${targetRole}".
 
-VERIFIED CANDIDATE CONTEXT:
-- Name: ${profile?.name || 'Candidate'}
+VERIFIED CANDIDATE PROFILE & CONTEXT:
+- Candidate Name: ${profile?.name || 'Candidate'}
 - Education: ${profile?.education || 'In progress'} (${profile?.university || ''})
-- Experience Level: ${profile?.experienceLevel || 'Not set'}
-- Current Skills: ${skillsContext || 'No skills logged yet'}
-- Resume Alignment: ${resumeAnalysis ? resumeAnalysis.roleAlignmentScore + '%' : 'No resume uploaded yet'}
-- Recent Assessment Results: ${recentAssessments || 'None completed yet'}
+- Experience: ${profile?.experienceLevel || 'Not specified'}
+- Logged Skills: ${skillsContext || 'No skills logged yet'}
+- Resume Alignment Score: ${resumeAnalysis ? `${resumeAnalysis.roleAlignmentScore}%` : 'Not uploaded yet'}
+- Recent Completed Assessments: ${recentAssessments || 'None completed yet'}
 
-GUIDELINES:
-1. Always reference their actual data when relevant.
-2. Be direct, clear, encouraging, and technically precise.
-3. If they ask about gaps or next steps, cite their specific scores and recommend actionable practical assessments.
-4. Keep replies concise, clean, and beautifully structured (use bullet points, bold highlights).
-5. Never hallucinate fake companies or fake experience.`;
+COACHING RULES:
+1. Directly and thoroughly answer the candidate's exact question or prompt.
+2. If they ask a technical question (e.g. about Python, Docker, system design, MLOps, SQL, debugging), give a clear, authoritative, and practical explanation.
+3. If they ask about skill gaps, readiness score, or career growth, contextualize with their actual logged data (${targetRole}, current scores).
+4. If they ask for advice on resumes, interviews, or project portfolios, provide concrete, actionable advice.
+5. Use markdown formatting with bullet points and bold highlights for readability.
+6. Keep the tone encouraging, professional, candid, and constructive.`;
+
+    // Construct clean prompt for Gemini
+    const recentHistoryText = (history || [])
+      .slice(-6)
+      .map((h: any) => `${h.sender === 'user' ? 'Candidate' : 'Coach'}: ${h.text}`)
+      .join('\n');
+
+    const prompt = recentHistoryText 
+      ? `Conversation History:\n${recentHistoryText}\n\nCandidate Question: ${message}\n\nPlease provide your helpful, direct response as the AI Career Coach:`
+      : message;
 
     const rawResponse = await generateWithGemini({
-      contents: [
-        { role: 'user', parts: [{ text: `System context:\n${systemInstruction}\n\nCandidate question: ${message}` }] }
-      ],
-      temperature: 0.4
+      contents: prompt,
+      systemInstruction,
+      temperature: 0.5
     });
 
-    const replyText = rawResponse || (() => {
-      let fallbackText = `Based on your profile for **${targetRole}**:`;
-      if (skills.length > 0) {
-        const topGap = skills.find((s: any) => s.currentLevel < s.requiredLevel);
-        if (topGap) {
-          fallbackText += `\n\nYour primary development focus should be **${topGap.name}** (Current: ${topGap.currentLevel}/10, Target: ${topGap.requiredLevel}/10). I recommend taking a practical assessment to verify your hands-on execution.`;
-        } else {
-          fallbackText += `\n\nYou have strong foundations logged across your core skills. Complete your next practical assessment to test your real-world incident response skills.`;
+    // Intelligent fallback responding directly to the candidate's query intent
+    const generateContextualFallback = (query: string) => {
+      const q = query.toLowerCase().trim();
+
+      if (q.includes('gap') || q.includes('weak') || q.includes('focus') || q.includes('improve')) {
+        const gapList = skills.filter((s: any) => s.currentLevel < s.requiredLevel);
+        if (gapList.length > 0) {
+          return `Looking at your verified skill matrix for **${targetRole}**, here are your primary growth priorities:\n\n` +
+            gapList.map((g: any) => `• **${g.name}** (Current: ${g.currentLevel}/10, Target: ${g.requiredLevel}/10) — Gap of ${g.requiredLevel - g.currentLevel} points (${g.confidence} confidence)`).join('\n') +
+            `\n\n**Strategic Recommendation:**\nI recommend tackling practical simulation challenges targeting **${gapList[0].name}** to verify your hands-on problem solving and elevate your readiness score.`;
         }
-      } else {
-        fallbackText += `\n\nYou haven't added skills or uploaded your resume yet. Complete your profile and upload your resume to receive customized career intelligence!`;
+        return `You currently have strong foundational coverage across all logged skills for **${targetRole}**! To further stand out, take advanced simulation challenges to build production-grade incident handling experience.`;
       }
-      return fallbackText;
-    })();
+
+      if (q.includes('calculate') || q.includes('readiness') || q.includes('score') || q.includes('formula')) {
+        return `### How SkillForge Calculates Your Verified Readiness Score:\n\n` +
+          `Your overall readiness score is a weighted synthesis of **4 verified pillars**:\n\n` +
+          `1. **Skill Benchmark Mastery (40% Weight):** Measures your current proficiency across core competencies required for ${targetRole}.\n` +
+          `2. **Practical Assessment Verification (30% Weight):** Real-world scenario simulations and telemetry diagnosis graded with Staff-level engineering rubrics.\n` +
+          `3. **Portfolio & Applied Projects (20% Weight):** Verified technical artifacts, architecture complexity, and hands-on deliverables.\n` +
+          `4. **Resume Alignment (10% Weight):** Extracted evidence of concrete accomplishments, tools, and experience matching industry requirements.\n\n` +
+          `Completing practical challenges is the fastest way to raise your verified readiness score!`;
+      }
+
+      if (q.includes('resume') || q.includes('cv') || q.includes('missing')) {
+        if (resumeAnalysis) {
+          return `### Resume Analysis for ${targetRole} (${resumeAnalysis.roleAlignmentScore}% Alignment):\n\n` +
+            `**Key Strengths Found:**\n` + (resumeAnalysis.strengths?.map((s: string) => `• ${s}`).join('\n') || '• Core technical background identified.') +
+            `\n\n**Identified Gaps & Missing Evidence:**\n` + (resumeAnalysis.missingEvidence?.map((m: string) => `• ${m}`).join('\n') || '• Needs more production metrics and incident telemetry.') +
+            `\n\n**Advice:** Update your bullet points to emphasize quantifiable impact (e.g. *reduced latency by 35%*, *handled 10k req/sec*) and add links to active GitHub repositories.`;
+        }
+        return `You haven't uploaded a resume yet! Upload your resume in the **Resume Analysis** tab to get automated extraction of verified competencies, alignment scoring, and tailored feedback.`;
+      }
+
+      if (q.includes('challenge') || q.includes('assessment') || q.includes('simulation') || q.includes('recommend')) {
+        return `### Recommended Next Challenge for ${targetRole}:\n\n` +
+          `Based on your current trajectory, I recommend the **Production Service Latency & Memory Profiling** challenge:\n\n` +
+          `• **Target Competencies:** Performance Profiling, Memory Optimization, Incident Telemetry\n` +
+          `• **Format:** Timed scenario analysis with live metrics logs and code review\n` +
+          `• **Goal:** Diagnose memory leak patterns and submit root-cause remediations to earn verified skill increases.`;
+      }
+
+      if (q.includes('interview') || q.includes('prepare') || q.includes('hiring') || q.includes('mock')) {
+        return `### Technical Interview Preparation Strategy for ${targetRole}:\n\n` +
+          `1. **System Design & Trade-offs:** Be prepared to discuss CAP theorem, caching strategies (Redis), data modeling, and asynchronous queues (Kafka/RabbitMQ).\n` +
+          `2. **Live Incident Debugging:** Hiring managers increasingly test candidates on how they triage production anomalies using logs and telemetry rather than pure algorithmic puzzles.\n` +
+          `3. **Behavioral STAR Stories:** Prepare 3-4 structured stories highlighting times you resolved technical ambiguity or optimized legacy bottlenecks.`;
+      }
+
+      // General intelligent response answering user query directly
+      return `### Career Coaching Insight on "${query.length > 50 ? query.substring(0, 50) + '...' : query}":\n\n` +
+        `As an aspiring **${targetRole}**, mastering practical execution and system-level trade-offs is key.\n\n` +
+        `• **Practical Application:** Ensure you can explain the *why* behind technology choices (performance, scalability, operational maintenance) rather than just syntax.\n` +
+        `• **Verified Proof:** Build production-grade projects featuring automated tests, containerized deployments (Docker), and monitoring.\n` +
+        `• **Immediate Action:** Explore our hands-on simulation assessments to demonstrate your problem-solving abilities under real-world scenarios.`;
+    };
+
+    const replyText = rawResponse || generateContextualFallback(message);
 
     const contextPills = [
       `Target: ${targetRole}`,

@@ -60,6 +60,8 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
   const [evaluationStage, setEvaluationStage] = useState<string>('');
   const [activeSubmissionResult, setActiveSubmissionResult] = useState<AssessmentSubmission | null>(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showIncompleteConfirm, setShowIncompleteConfirm] = useState(false);
+  const [showSubmittedAnswers, setShowSubmittedAnswers] = useState(false);
 
   // Sync activeAssessmentId prop
   useEffect(() => {
@@ -91,15 +93,16 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
     return () => clearInterval(interval);
   }, [activeAssessment, isTimerRunning, activeSubmissionResult, isEvaluating]);
 
-  const startAssessment = (assessment: PracticalAssessment) => {
+  const startAssessment = (assessment: PracticalAssessment, forceNewAttempt = false) => {
     setActiveAssessment(assessment);
     setTimeRemainingSeconds(assessment.estimatedMinutes * 60);
     setTimeSpentSeconds(0);
     setIsTimerRunning(true);
     setActiveSubmissionResult(null);
+    setShowSubmittedAnswers(false);
 
-    // Check if previously completed
-    const previousSub = state.assessmentSubmissions.find((s) => s.assessmentId === assessment.id);
+    // Check if previously completed (unless forcing a fresh retake)
+    const previousSub = !forceNewAttempt ? state.assessmentSubmissions.find((s) => s.assessmentId === assessment.id) : null;
     if (previousSub) {
       setActiveSubmissionResult(previousSub);
       setAnswers(previousSub.answers);
@@ -113,6 +116,12 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
         }))
       );
       setUploadedFiles([]);
+    }
+  };
+
+  const handleRetake = () => {
+    if (activeAssessment) {
+      startAssessment(activeAssessment, true);
     }
   };
 
@@ -135,19 +144,29 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
     ]);
   };
 
+  const checkIncompleteBeforeSubmit = () => {
+    const totalWords = answers.reduce((sum, a) => sum + (a.answerText?.trim().split(/\s+/).filter(Boolean).length || 0), 0);
+    if (totalWords < 15) {
+      setShowIncompleteConfirm(true);
+      return;
+    }
+    handleAssessmentSubmit();
+  };
+
   const handleAssessmentSubmit = async () => {
     if (!activeAssessment) return;
+    setShowIncompleteConfirm(false);
 
     try {
       setIsEvaluating(true);
       setIsTimerRunning(false);
 
       const stages = [
-        'Analyzing submission and telemetry diagnosis...',
-        'Evaluating technical accuracy and depth...',
-        'Checking practical engineering trade-offs...',
-        'Scoring against senior industry rubric...',
-        'Updating candidate skill level deltas...'
+        'Analyzing submitted technical explanations and code...',
+        'Verifying root cause analysis against telemetry logs...',
+        'Evaluating senior-level system design and edge-case handling...',
+        'Scoring accuracy against industry benchmark rubric...',
+        'Calculating verified candidate competency adjustments...'
       ];
 
       let stageIdx = 0;
@@ -442,12 +461,61 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
             )}
 
             {activeSubmissionResult && (
-              <div className="flex items-center gap-2 bg-emerald-50 text-emerald-800 px-3 py-1 rounded-xl border border-emerald-200 text-xs font-bold">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Score: {activeSubmissionResult.evaluation.overallScore}%</span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleRetake}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Retake Assessment</span>
+                </button>
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-xl border text-xs font-bold ${
+                  activeSubmissionResult.evaluation.overallScore === 0
+                    ? 'bg-rose-50 text-rose-800 border-rose-200'
+                    : activeSubmissionResult.evaluation.overallScore < 60
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                }`}>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Score: {activeSubmissionResult.evaluation.overallScore}%</span>
+                </div>
               </div>
             )}
           </div>
+
+          {/* Incomplete Submission Warning Modal */}
+          {showIncompleteConfirm && (
+            <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-amber-200 space-y-4">
+                <div className="flex items-center gap-3 text-amber-600">
+                  <div className="p-2 rounded-xl bg-amber-50">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-extrabold text-base text-slate-900">Incomplete Submission Warning</h3>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Your response is currently blank or contains minimal text. Practical assessments are evaluated strictly on technical accuracy, root-cause evidence, and code/config fixes.
+                </p>
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-[11px] text-rose-800 font-semibold">
+                  Blank or placeholder answers will receive an evaluated score of 0% and no competency points will be awarded.
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setShowIncompleteConfirm(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+                  >
+                    Keep Writing Solution
+                  </button>
+                  <button
+                    onClick={handleAssessmentSubmit}
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Submit Anyway (0% Score)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Exit Confirmation Modal */}
           {showExitConfirm && (
@@ -589,22 +657,58 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
 
               {/* Specific Constructive Feedback */}
               <div className="bg-white border border-slate-200/80 rounded-3xl p-6 lg:p-8 shadow-xs space-y-3">
-                <h3 className="font-bold text-base text-slate-900">
-                  Assessor Feedback & Guidance
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-base text-slate-900">
+                    Assessor Feedback & Guidance
+                  </h3>
+                  <button
+                    onClick={() => setShowSubmittedAnswers(!showSubmittedAnswers)}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                  >
+                    {showSubmittedAnswers ? 'Hide Your Submitted Answers' : 'View Your Submitted Answers'}
+                  </button>
+                </div>
                 <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/70 text-xs text-slate-700 leading-relaxed whitespace-pre-line">
                   {activeSubmissionResult.evaluation.specificFeedback}
                 </div>
+
+                {/* Submitted Answers Drawer */}
+                {showSubmittedAnswers && (
+                  <div className="mt-4 pt-4 border-t border-slate-200/80 space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                      Your Graded Submission
+                    </h4>
+                    <div className="space-y-3">
+                      {activeSubmissionResult.answers.map((a, i) => (
+                        <div key={i} className="p-3.5 rounded-2xl bg-white border border-slate-200 space-y-1.5">
+                          <div className="text-xs font-bold text-slate-800">
+                            Q{i + 1}: {a.question}
+                          </div>
+                          <div className="text-xs font-mono bg-slate-50 p-2.5 rounded-xl text-slate-700 whitespace-pre-wrap">
+                            {a.answerText?.trim() || <span className="text-rose-500 italic">Left blank (0 words)</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Skill Score Updates */}
               {activeSubmissionResult.evaluation.skillScoreUpdates && activeSubmissionResult.evaluation.skillScoreUpdates.length > 0 && (
                 <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xs">
-                  <div className="flex items-center gap-2 mb-4">
-                    <TrendingUp className="w-5 h-5 text-indigo-600" />
-                    <h3 className="font-bold text-sm text-slate-900 uppercase tracking-wider">
-                      Verified Competency Adjustments
-                    </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-indigo-600" />
+                      <h3 className="font-bold text-sm text-slate-900 uppercase tracking-wider">
+                        Verified Competency Adjustments
+                      </h3>
+                    </div>
+                    {activeSubmissionResult.evaluation.overallScore < 60 && (
+                      <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                        Score below 60% — 0 skill points awarded
+                      </span>
+                    )}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {activeSubmissionResult.evaluation.skillScoreUpdates.map((update, i) => (
@@ -612,7 +716,9 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
                         <div className="font-bold text-xs text-slate-900 mb-1">{update.skillName}</div>
                         <div className="flex items-center justify-between text-xs mb-2">
                           <span className="text-slate-500">Level {update.previousScore} → <strong>{update.newScore}/10</strong></span>
-                          <span className="font-bold text-emerald-600">+{update.delta}</span>
+                          <span className={`font-bold ${update.delta > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {update.delta > 0 ? `+${update.delta}` : '+0'}
+                          </span>
                         </div>
                         <p className="text-[11px] text-slate-500 italic">"{update.rationale}"</p>
                       </div>
@@ -621,34 +727,39 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
                 </div>
               )}
 
-              {/* Recommended Adaptive Next Challenge */}
-              {activeSubmissionResult.evaluation.recommendedNextChallengeTitle && (
-                <div className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-violet-900 text-white rounded-3xl p-6 lg:p-8 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div className="space-y-2 max-w-xl">
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-white/15 px-2.5 py-0.5 rounded-full border border-white/20">
-                      Adaptive Loop Recommendation
-                    </span>
-                    <h3 className="text-xl font-bold">
-                      {activeSubmissionResult.evaluation.recommendedNextChallengeTitle}
-                    </h3>
-                    <p className="text-xs text-indigo-100 leading-relaxed">
-                      {activeSubmissionResult.evaluation.recommendedNextChallengeDescription}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => {
-                        setActiveAssessment(null);
-                        onSelectAssessment(null);
-                      }}
-                      className="px-4 py-2.5 rounded-xl bg-white text-indigo-900 font-bold text-xs shadow-xs hover:bg-slate-50 cursor-pointer"
-                    >
-                      Browse More Challenges
-                    </button>
-                  </div>
+              {/* Action Banner / Adaptive Loop */}
+              <div className="bg-gradient-to-br from-indigo-900 via-indigo-800 to-violet-900 text-white rounded-3xl p-6 lg:p-8 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="space-y-2 max-w-xl">
+                  <span className="text-[10px] font-bold uppercase tracking-wider bg-white/15 px-2.5 py-0.5 rounded-full border border-white/20">
+                    {activeSubmissionResult.evaluation.overallScore < 60 ? 'Suggested Re-Attempt' : 'Adaptive Loop Recommendation'}
+                  </span>
+                  <h3 className="text-xl font-bold">
+                    {activeSubmissionResult.evaluation.recommendedNextChallengeTitle}
+                  </h3>
+                  <p className="text-xs text-indigo-100 leading-relaxed">
+                    {activeSubmissionResult.evaluation.recommendedNextChallengeDescription}
+                  </p>
                 </div>
-              )}
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleRetake}
+                    className="px-4 py-2.5 rounded-xl bg-white text-indigo-900 font-bold text-xs shadow-xs hover:bg-slate-50 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Retake Assessment</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveAssessment(null);
+                      onSelectAssessment(null);
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs border border-white/20 cursor-pointer"
+                  >
+                    Browse Catalog
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -711,30 +822,50 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
               <div className="lg:col-span-7 space-y-6">
                 <div className="bg-white border border-slate-200/80 rounded-3xl p-6 lg:p-8 shadow-xs space-y-6">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <h3 className="text-base font-bold text-slate-900">
-                      Your Technical Response & Diagnosis
-                    </h3>
-                    <span className="text-xs text-slate-400">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Your Technical Response & Diagnosis
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Evaluated strictly on accuracy, code/config fixes, and root-cause evidence.
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
                       Auto-saving in browser
                     </span>
                   </div>
 
                   {/* Question Prompt Inputs */}
                   <div className="space-y-6">
-                    {activeAssessment.promptQuestions.map((q, idx) => (
-                      <div key={idx} className="space-y-2">
-                        <label className="block text-xs font-bold text-slate-800">
-                          <span className="text-indigo-600 mr-1">Q{idx + 1}:</span> {q}
-                        </label>
-                        <textarea
-                          rows={4}
-                          value={answers[idx]?.answerText || ''}
-                          onChange={(e) => handleAnswerChange(idx, e.target.value)}
-                          placeholder="Provide your specific technical explanation, root cause, code fix, or operational steps..."
-                          className="w-full p-3.5 rounded-2xl border border-slate-200 text-xs text-slate-900 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-indigo-500 transition-colors"
-                        />
-                      </div>
-                    ))}
+                    {activeAssessment.promptQuestions.map((q, idx) => {
+                      const text = answers[idx]?.answerText || '';
+                      const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+                      return (
+                        <div key={idx} className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-xs font-bold text-slate-800">
+                              <span className="text-indigo-600 mr-1">Q{idx + 1}:</span> {q}
+                            </label>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              wordCount === 0 
+                                ? 'bg-slate-100 text-slate-400' 
+                                : wordCount < 10 
+                                ? 'bg-amber-50 text-amber-700' 
+                                : 'bg-emerald-50 text-emerald-700'
+                            }`}>
+                              {wordCount === 0 ? 'Unanswered' : `${wordCount} words`}
+                            </span>
+                          </div>
+                          <textarea
+                            rows={4}
+                            value={text}
+                            onChange={(e) => handleAnswerChange(idx, e.target.value)}
+                            placeholder="Provide your specific technical explanation, root cause, code fix, or operational steps..."
+                            className="w-full p-3.5 rounded-2xl border border-slate-200 text-xs text-slate-900 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-indigo-500 transition-colors"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {/* Optional File Upload Dropzone */}
@@ -776,7 +907,7 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
                     </div>
 
                     <button
-                      onClick={handleAssessmentSubmit}
+                      onClick={checkIncompleteBeforeSubmit}
                       disabled={isEvaluating}
                       className="px-6 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-xs shadow-md shadow-indigo-500/25 cursor-pointer flex items-center gap-2 transition-all"
                     >
