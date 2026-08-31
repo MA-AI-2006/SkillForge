@@ -1,0 +1,6 @@
+{
+  "name": "SkillForge",
+  "description": "AI-powered career readiness and practical assessment platform that analyzes real experience, evaluates practical skills, identifies gaps, and builds an adaptive career path.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
