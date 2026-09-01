@@ -30,6 +30,7 @@ import {
 } from '../../types';
 import { DEFAULT_ASSESSMENTS } from '../../data/defaultAssessments';
 import { parseUploadedFile } from '../../utils/fileParser';
+import { evaluateAssessmentClientSide } from '../../services/assessmentEvaluator';
 
 interface AssessmentsViewProps {
   state: SkillForgeState;
@@ -176,26 +177,46 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
         setEvaluationStage(stages[stageIdx]);
       }, 1200);
 
-      const response = await fetch('/api/assessment/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assessment: activeAssessment,
-          answers,
-          files: uploadedFiles,
-          timeSpentSeconds: timeSpentSeconds || 60,
-          userSkills: state.skills
-        })
-      });
+      let evaluation: AssessmentEvaluation | null = null;
+
+      try {
+        const response = await fetch('/api/assessment/evaluate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assessment: activeAssessment,
+            answers,
+            files: uploadedFiles,
+            timeSpentSeconds: timeSpentSeconds || 60,
+            userSkills: state.skills
+          })
+        });
+
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const result = await response.json();
+            if (result && result.evaluation) {
+              evaluation = result.evaluation;
+            }
+          }
+        }
+      } catch (networkErr) {
+        console.warn('Backend /api/assessment/evaluate unavailable, using client-side grading engine:', networkErr);
+      }
 
       clearInterval(stageInterval);
 
-      if (!response.ok) {
-        throw new Error('Evaluation failed.');
+      // Fallback to client-side evaluation engine if backend was unreachable or returned non-JSON (e.g. static hosting)
+      if (!evaluation) {
+        evaluation = evaluateAssessmentClientSide(
+          activeAssessment,
+          answers,
+          uploadedFiles,
+          timeSpentSeconds || 60,
+          state.skills
+        );
       }
-
-      const result = await response.json();
-      const evaluation: AssessmentEvaluation = result.evaluation;
 
       const submission: AssessmentSubmission = {
         id: `sub-${Date.now()}`,
@@ -223,9 +244,9 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
               ...updatedSkills[existingIdx].evidence,
               {
                 source: 'assessment',
-                description: `${update.rationale} (Scored ${evaluation.overallScore}% in ${activeAssessment.title})`,
+                description: `${update.rationale} (Scored ${evaluation!.overallScore}% in ${activeAssessment.title})`,
                 date: new Date().toISOString().split('T')[0],
-                scoreImpact: evaluation.overallScore
+                scoreImpact: evaluation!.overallScore
               }
             ]
           };
@@ -240,9 +261,9 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
             evidence: [
               {
                 source: 'assessment',
-                description: `Assessed in ${activeAssessment.title} with score ${evaluation.overallScore}%.`,
+                description: `Assessed in ${activeAssessment.title} with score ${evaluation!.overallScore}%.`,
                 date: new Date().toISOString().split('T')[0],
-                scoreImpact: evaluation.overallScore
+                scoreImpact: evaluation!.overallScore
               }
             ]
           });
@@ -252,9 +273,32 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
       setActiveSubmissionResult(submission);
       onSubmitAssessment(submission, updatedSkills);
       setIsEvaluating(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
       console.error('Error submitting assessment:', err);
+      // Even in the event of an unexpected runtime error, guarantee evaluated fallback
+      const fallbackEvaluation = evaluateAssessmentClientSide(
+        activeAssessment,
+        answers,
+        uploadedFiles,
+        timeSpentSeconds || 60,
+        state.skills
+      );
+      const fallbackSubmission: AssessmentSubmission = {
+        id: `sub-${Date.now()}`,
+        assessmentId: activeAssessment.id,
+        assessmentTitle: activeAssessment.title,
+        targetRole: activeAssessment.targetRole,
+        submittedAt: new Date().toISOString(),
+        timeSpentSeconds,
+        answers,
+        files: uploadedFiles,
+        evaluation: fallbackEvaluation
+      };
+      setActiveSubmissionResult(fallbackSubmission);
+      onSubmitAssessment(fallbackSubmission, state.skills);
       setIsEvaluating(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
