@@ -43,17 +43,19 @@ async function generateWithGemini(params: {
   const ai = getGeminiClient();
   if (!ai) return null;
 
-  // Prioritize stable, officially supported models in order
+  // Prioritize stable, high-availability production models
   const candidateModels = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
     'gemini-3.7-flash',
-    'gemini-flash-latest',
-    'gemini-3.1-flash-lite'
+    'gemini-2.5-pro'
   ];
 
   for (const model of candidateModels) {
     try {
       const config: any = {
-        temperature: params.temperature ?? 0.2
+        temperature: params.temperature ?? 0.3
       };
       if (params.systemInstruction) {
         config.systemInstruction = params.systemInstruction;
@@ -73,19 +75,8 @@ async function generateWithGemini(params: {
         return text;
       }
     } catch (err: any) {
-      // Model was busy or unavailable; try next model in candidate list
-      const isTransient = 
-        err?.status === 503 || 
-        err?.code === 503 || 
-        err?.status === 429 || 
-        err?.code === 429 ||
-        String(err?.message || '').includes('503') ||
-        String(err?.message || '').includes('high demand') ||
-        String(err?.message || '').includes('UNAVAILABLE');
-
-      if (isTransient) {
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
+      console.warn(`[Gemini API] Failed on model ${model}:`, err?.message || err);
+      // Try next model in list
       continue;
     }
   }

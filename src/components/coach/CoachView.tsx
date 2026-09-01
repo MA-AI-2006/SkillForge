@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   Bot,
   Send,
@@ -113,11 +114,45 @@ export const CoachView: React.FC<CoachViewProps> = ({
       setIsLoading(false);
     } catch (err: any) {
       console.error('Error in Coach Chat:', err);
+      
+      // Smart contextual fallback based on exact prompt
+      const q = text.toLowerCase();
+      let fallbackText = '';
+      if (q.includes('gap') || q.includes('weak') || q.includes('focus')) {
+        const gapList = state.skills.filter(s => s.currentLevel < s.requiredLevel);
+        if (gapList.length > 0) {
+          fallbackText = `### Your Current Skill Gaps for ${targetRole}:\n\n` +
+            gapList.map(g => `• **${g.name}** (Current: ${g.currentLevel}/10, Target: ${g.requiredLevel}/10) — Deficit of ${g.requiredLevel - g.currentLevel} pts`).join('\n') +
+            `\n\n**Action Plan:** Focus on practical assessments that provide hands-on code and telemetry troubleshooting to quickly close these gaps.`;
+        } else {
+          fallbackText = `You have strong verified foundation scores across your logged competencies for **${targetRole}**. Focus on taking advanced practical challenges to test production incident handling.`;
+        }
+      } else if (q.includes('score') || q.includes('readiness') || q.includes('calculate')) {
+        fallbackText = `### How SkillForge Calculates Your Verified Readiness (${readiness.overallReadiness}%):\n\n` +
+          `1. **Practical Assessments (40% Weight)**: Verified hands-on execution and telemetry diagnostics (${readiness.practicalReadiness}%).\n` +
+          `2. **Profile & Skill Benchmarks (35% Weight)**: Competency ratings across requirements (${readiness.profileReadiness}%).\n` +
+          `3. **Resume Evidence (25% Weight)**: Extracted career accomplishments and projects (${readiness.resumeReadiness}%).\n\n` +
+          `**Calculation Logic:**\n${readiness.calculationRationale}`;
+      } else if (q.includes('resume') || q.includes('cv')) {
+        fallbackText = state.resumeAnalysis 
+          ? `### Resume Insights for ${targetRole} (${state.resumeAnalysis.roleAlignmentScore}% Alignment):\n\n` +
+            `**Key Strengths:**\n` + (state.resumeAnalysis.strengths?.map(s => `• ${s}`).join('\n') || '• Core foundations identified.') +
+            `\n\n**Areas for Improvement:**\n` + (state.resumeAnalysis.missingEvidence?.map(m => `• ${m}`).join('\n') || '• Add more production metrics and links to code.')
+          : `Upload your resume in the **Resume Analysis** tab to get automated extraction of verified competencies, alignment scoring, and tailored feedback!`;
+      } else {
+        fallbackText = `### Career Coaching Guidance for ${targetRole}:\n\n` +
+          `To accelerate your readiness towards **${targetRole}**:\n\n` +
+          `• **Deepen Practical Execution:** Focus on diagnosing production incidents, writing clean modular code, and containerizing microservices.\n` +
+          `• **Demonstrate Real Evidence:** Complete practical scenario simulations to earn verified skill increases.\n` +
+          `• **Current Standing:** Your verified readiness is at **${readiness.overallReadiness}%**. Keep building verified evidence!`;
+      }
+
       const fallbackMsg: CoachMessage = {
         id: `ai-${Date.now()}`,
         sender: 'assistant',
-        text: `Based on your profile for **${targetRole}**: Your verified readiness is currently ${readiness.overallReadiness}%. Focus on completing practical assessments to demonstrate your problem-solving abilities.`,
-        timestamp: new Date().toISOString()
+        text: fallbackText,
+        timestamp: new Date().toISOString(),
+        contextPills: [`Target: ${targetRole}`, `Readiness: ${readiness.overallReadiness}%`]
       };
       onUpdateCoachHistory([...newHistory, fallbackMsg]);
       setIsLoading(false);
@@ -180,10 +215,16 @@ export const CoachView: React.FC<CoachViewProps> = ({
                       className={`p-4 rounded-2xl text-xs leading-relaxed inline-block ${
                         isUser
                           ? 'bg-slate-900 text-white rounded-tr-xs'
-                          : 'bg-slate-50 border border-slate-200/70 text-slate-800 rounded-tl-xs whitespace-pre-line'
+                          : 'bg-slate-50 border border-slate-200/70 text-slate-800 rounded-tl-xs text-left'
                       }`}
                     >
-                      {msg.text}
+                      {isUser ? (
+                        <p className="whitespace-pre-line">{msg.text}</p>
+                      ) : (
+                        <div className="markdown-body space-y-2 prose prose-xs max-w-none text-slate-800">
+                          <ReactMarkdown>{msg.text}</ReactMarkdown>
+                        </div>
+                      )}
                     </div>
 
                     {/* Context Pills */}

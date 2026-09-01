@@ -799,18 +799,20 @@ export const AssessmentsView: React.FC<AssessmentsViewProps> = ({
                     </div>
                   )}
 
-                  {activeAssessment.resourceFiles && activeAssessment.resourceFiles.length > 0 && (
+                  {activeAssessment.providedResources && activeAssessment.providedResources.length > 0 && (
                     <div className="border-t border-slate-100 pt-3 space-y-2">
                       <h4 className="text-xs font-bold text-slate-900">Incident Artifacts / Data:</h4>
-                      {activeAssessment.resourceFiles.map((rf, i) => (
+                      {activeAssessment.providedResources.map((rf, i) => (
                         <div key={i} className="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] space-y-1">
                           <div className="flex items-center justify-between text-slate-400">
                             <span>{rf.name}</span>
                             <span>{rf.type}</span>
                           </div>
-                          <pre className="overflow-x-auto text-emerald-400 max-h-36">
-                            {rf.content}
-                          </pre>
+                          {rf.content && (
+                            <pre className="overflow-x-auto text-emerald-400 max-h-36">
+                              {rf.content}
+                            </pre>
+                          )}
                         </div>
                       ))}
                     </div>
