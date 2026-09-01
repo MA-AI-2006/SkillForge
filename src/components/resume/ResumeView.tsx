@@ -13,10 +13,14 @@ import {
   ShieldCheck,
   Code2,
   Trash2,
-  FileCode
+  FileCode,
+  FileCheck,
+  Copy,
+  ChevronRight
 } from 'lucide-react';
 import { CareerRole, ResumeAnalysisResult, SkillForgeState, UserSkill } from '../../types';
 import { parseUploadedFile } from '../../utils/fileParser';
+import { analyzeResumeClientSide } from '../../services/resumeAnalyzer';
 import { CAREER_ROLES } from '../../data/careerRoles';
 
 interface ResumeViewProps {
@@ -25,6 +29,85 @@ interface ResumeViewProps {
   onApplyExtractedSkills: (skills: UserSkill[], profileUpdates: any) => void;
   onNavigate: (tab: string) => void;
 }
+
+const SAMPLE_RESUMES = [
+  {
+    title: 'AI / ML Engineer',
+    role: 'AI / ML Engineer',
+    filename: 'Alex_Chen_AIML_Resume.pdf',
+    text: `Alex Chen
+San Francisco, CA | alex.chen@example.com | github.com/alexchen-ai
+
+EDUCATION
+University of California, Berkeley — B.S. in Computer Science (2020 - 2024)
+
+TECHNICAL SKILLS
+Languages: Python, TypeScript, SQL, C++, Bash
+Frameworks & Libraries: PyTorch, TensorFlow, Scikit-Learn, Hugging Face Transformers, FastAPI, LangChain, LLM / GenAI
+Infrastructure & Cloud: Docker, Kubernetes, AWS (S3, EC2, Lambda), GCP (Vertex AI), MLflow, CI/CD
+Databases & Ops: PostgreSQL, Redis, Pinecone (Vector DB), Prometheus & Grafana, Git
+
+EXPERIENCE
+Machine Learning Engineer Intern | Synthetix AI (June 2023 - Dec 2023)
+- Engineered retrieval-augmented generation (RAG) pipeline using PyTorch, LangChain, and FastAPI, cutting query response latency by 35%.
+- Fine-tuned transformer models using Hugging Face and PyTorch on domain datasets.
+- Containerized model inference services with Docker and deployed to Kubernetes clusters on AWS.
+
+PROJECTS
+OpenSource Vision & LLM Profiler | Python, PyTorch, Docker
+- Built real-time inference and evaluation benchmark suite using PyTorch and OpenCV.
+- Implemented automated CI/CD evaluation pipelines with GitHub Actions and MLflow tracking.`
+  },
+  {
+    title: 'Full Stack Developer',
+    role: 'Full Stack Developer',
+    filename: 'Maya_Lin_FullStack_Resume.pdf',
+    text: `Maya Lin
+Austin, TX | maya.lin@example.com | github.com/mayalin-dev
+
+EDUCATION
+University of Washington — B.S. in Software Engineering (2019 - 2023)
+
+TECHNICAL SKILLS
+Languages: TypeScript, JavaScript, Python, SQL, HTML & CSS
+Frontend: React, Next.js, Tailwind CSS, Redux, Zustand
+Backend: Node.js, Express, FastAPI, GraphQL, REST APIs, System Design
+Databases & Cloud: PostgreSQL, MongoDB, Redis, AWS (S3, CloudFront), Docker, CI/CD, Git
+
+EXPERIENCE
+Full Stack Software Developer | Nexus Cloud Solutions (Aug 2023 - Present)
+- Developed responsive React and Next.js web applications handling 50k+ daily active users.
+- Built scalable REST and GraphQL microservices in Node.js and TypeScript connected to PostgreSQL.
+- Implemented Redis caching layers reducing database query loads by 45%.
+- Automated continuous integration and deployment with Docker and GitHub Actions.
+
+PROJECTS
+Distributed Task Manager | React, TypeScript, Node.js, Docker
+- Architected collaborative workspace with real-time updates and role-based permissions.`
+  },
+  {
+    title: 'DevOps & Cloud Engineer',
+    role: 'DevOps & Cloud Platform Engineer',
+    filename: 'David_Kim_DevOps_Resume.pdf',
+    text: `David Kim
+Seattle, WA | david.kim@example.com | github.com/davidkim-ops
+
+EDUCATION
+University of Illinois Urbana-Champaign — B.S. in Computer Engineering (2019 - 2023)
+
+TECHNICAL SKILLS
+Cloud & Infrastructure: AWS, GCP, Terraform, Kubernetes, Docker, Helm, Linux & Shell, CI/CD
+Automation & Languages: Python, Go, Bash, Git, REST APIs
+Observability & Security: Prometheus & Grafana, Datadog, Incident Response, System Design, Cybersecurity
+
+EXPERIENCE
+Cloud Platform Engineer | CloudSphere Technologies (July 2023 - Present)
+- Managed multi-region Kubernetes clusters on AWS EKS using Terraform Infrastructure-as-Code.
+- Built automated CI/CD pipelines deploying containerized microservices to production runtimes.
+- Configured Prometheus and Grafana alerting dashboards for service telemetry and incident triage.
+- Reduced infrastructure provisioning lead time by 60% through reusable Terraform modules.`
+  }
+];
 
 export const ResumeView: React.FC<ResumeViewProps> = ({
   state,
@@ -43,15 +126,15 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
   const targetRole = state.profile.targetRole || 'AI / ML Engineer';
 
   const stages = [
-    'Reading and validating document format...',
-    'Extracting candidate background & education...',
-    'Mapping explicit technical competencies...',
+    'Reading and extracting document streams...',
+    'Analyzing candidate background & education...',
+    'Identifying explicit technical competencies...',
     `Benchmarking against ${targetRole} industry standards...`,
     'Detecting missing evidence & practical gaps...',
-    'Synthesizing actionable career readiness report...'
+    'Synthesizing verified career readiness report...'
   ];
 
-  const handleFileUpload = async (file: File) => {
+  const processResumeContent = async (text: string, fileName: string) => {
     try {
       setIsProcessing(true);
       setErrorMessage(null);
@@ -63,87 +146,82 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
       const stageInterval = setInterval(() => {
         stageIndex = (stageIndex + 1) % stages.length;
         setProcessingStage(stages[stageIndex]);
-      }, 1200);
+      }, 1000);
 
-      const parsed = await parseUploadedFile(file);
-      
-      if (!parsed.extractedText || parsed.extractedText.trim().length < 20) {
-        clearInterval(stageInterval);
-        setIsProcessing(false);
-        setErrorMessage('Could not extract readable text from this file. You can paste your resume text directly below.');
-        return;
+      let analysisResult: ResumeAnalysisResult | null = null;
+
+      // 1. First try backend API if reachable
+      try {
+        const response = await fetch('/api/resume/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            resumeText: text,
+            fileName,
+            targetRole
+          })
+        });
+
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            analysisResult = await response.json();
+          }
+        }
+      } catch (networkErr) {
+        console.warn('Backend /api/resume/analyze unavailable, utilizing client engine:', networkErr);
       }
-
-      const response = await fetch('/api/resume/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resumeText: parsed.extractedText,
-          fileName: parsed.fileName,
-          targetRole
-        })
-      });
 
       clearInterval(stageInterval);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Resume analysis failed');
+      // 2. If backend was not reached or returned non-JSON, use client engine
+      if (!analysisResult) {
+        analysisResult = analyzeResumeClientSide(text, fileName, targetRole);
       }
 
-      const data: ResumeAnalysisResult = await response.json();
-      onUpdateResumeAnalysis(data);
+      onUpdateResumeAnalysis(analysisResult);
       setIsProcessing(false);
+      setPasteTextMode(false);
     } catch (err: any) {
-      console.error('Error analyzing resume:', err);
+      console.error('Error processing resume:', err);
       setIsProcessing(false);
       setErrorMessage(err.message || 'Failed to process resume. Please try again or paste resume text.');
     }
   };
 
-  const handlePastedTextSubmit = async () => {
-    if (!rawText || rawText.trim().length < 30) {
-      setErrorMessage('Please paste at least a few sentences of your resume or CV.');
-      return;
-    }
-
+  const handleFileUpload = async (file: File) => {
     try {
       setIsProcessing(true);
       setErrorMessage(null);
       setAppliedSuccess(false);
+      setProcessingStage('Reading and extracting document...');
 
-      let stageIndex = 0;
-      setProcessingStage(stages[0]);
-      const stageInterval = setInterval(() => {
-        stageIndex = (stageIndex + 1) % stages.length;
-        setProcessingStage(stages[stageIndex]);
-      }, 1200);
-
-      const response = await fetch('/api/resume/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resumeText: rawText,
-          fileName: 'Pasted_Resume_Text.txt',
-          targetRole
-        })
-      });
-
-      clearInterval(stageInterval);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Analysis failed');
+      const parsed = await parseUploadedFile(file);
+      
+      if (!parsed.extractedText || parsed.extractedText.trim().length < 15) {
+        setIsProcessing(false);
+        setErrorMessage(`Could not extract readable text from "${file.name}". Please ensure it is not password-protected, or paste your resume text below.`);
+        return;
       }
 
-      const data: ResumeAnalysisResult = await response.json();
-      onUpdateResumeAnalysis(data);
-      setIsProcessing(false);
-      setPasteTextMode(false);
+      await processResumeContent(parsed.extractedText, parsed.fileName);
     } catch (err: any) {
+      console.error('File parsing failed:', err);
       setIsProcessing(false);
-      setErrorMessage(err.message || 'Failed to process resume.');
+      setErrorMessage('Could not read file. Please try pasting your resume text.');
     }
+  };
+
+  const handlePastedTextSubmit = async () => {
+    if (!rawText || rawText.trim().length < 25) {
+      setErrorMessage('Please paste at least a few sentences of your resume or CV.');
+      return;
+    }
+    await processResumeContent(rawText, 'Pasted_Resume.txt');
+  };
+
+  const handleLoadSample = async (sample: typeof SAMPLE_RESUMES[0]) => {
+    await processResumeContent(sample.text, sample.filename);
   };
 
   const handleApplyToProfile = () => {
@@ -195,7 +273,7 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
               Analyze Your Real Resume
             </h1>
             <p className="text-slate-500 text-xs sm:text-sm mt-1 max-w-2xl">
-              Upload your actual resume (PDF, DOC, DOCX, TXT). SkillForge maps your verified competencies, distinguishes explicit from inferred skills, and detects gaps against {targetRole}.
+              Upload your actual resume (PDF, DOCX, DOC, TXT, MD). SkillForge maps your verified competencies, distinguishes explicit from inferred skills, and detects gaps against {targetRole}.
             </p>
           </div>
 
@@ -212,54 +290,87 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
 
       {/* Upload Dropzone or Text Input */}
       {!pasteTextMode ? (
-        <div
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-              handleFileUpload(e.dataTransfer.files[0]);
-            }
-          }}
-          className={`bg-white border-2 border-dashed rounded-3xl p-8 lg:p-12 text-center transition-all ${
-            isDragging
-              ? 'border-indigo-600 bg-indigo-50/50 scale-[1.01]'
-              : 'border-slate-300 hover:border-indigo-400'
-          }`}
-        >
-          <div className="max-w-md mx-auto space-y-4">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto shadow-2xs">
-              <UploadCloud className="w-8 h-8" />
-            </div>
+        <div className="space-y-4">
+          <div
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleFileUpload(e.dataTransfer.files[0]);
+              }
+            }}
+            className={`bg-white border-2 border-dashed rounded-3xl p-8 lg:p-12 text-center transition-all ${
+              isDragging
+                ? 'border-indigo-600 bg-indigo-50/50 scale-[1.01]'
+                : 'border-slate-300 hover:border-indigo-400'
+            }`}
+          >
+            <div className="max-w-md mx-auto space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto shadow-2xs">
+                <UploadCloud className="w-8 h-8" />
+              </div>
 
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                Upload your resume
-              </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Drag and drop your file here, or click to browse from your device
-              </p>
-            </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Upload your resume
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Drag and drop your PDF or Word document here, or click to browse
+                </p>
+              </div>
 
-            <div className="flex items-center justify-center gap-3">
-              <label className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs cursor-pointer transition-colors inline-block">
-                <span>Browse Files</span>
-                <input
-                  type="file"
-                  accept=".pdf,.doc,.docx,.txt,.md"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      handleFileUpload(e.target.files[0]);
-                    }
-                  }}
-                  className="hidden"
-                />
-              </label>
-            </div>
+              <div className="flex items-center justify-center gap-3">
+                <label className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs cursor-pointer transition-colors inline-block">
+                  <span>Browse Files</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt,.md,.rtf"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleFileUpload(e.target.files[0]);
+                      }
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
 
-            <div className="text-[11px] text-slate-400 pt-2">
-              Supported Formats: PDF, DOC, DOCX, TXT • Max 10MB • Strictly Private & Client-Controlled
+              <div className="text-[11px] text-slate-400 pt-2">
+                Supported Formats: PDF, DOCX, DOC, TXT, MD, RTF • Max 15MB • Client & Server Secure Processing
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Sample Resumes for 1-Click Testing */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                Want to test immediately? Try a sample verified resume:
+              </span>
+              <span className="text-[11px] text-slate-400">1-click instant analysis</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {SAMPLE_RESUMES.map((sample, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleLoadSample(sample)}
+                  disabled={isProcessing}
+                  className="p-2.5 rounded-xl bg-white border border-slate-200/80 hover:border-indigo-300 hover:bg-indigo-50/40 text-left transition-all cursor-pointer flex items-center justify-between group disabled:opacity-50"
+                >
+                  <div className="overflow-hidden">
+                    <div className="font-bold text-xs text-slate-900 group-hover:text-indigo-600 truncate">
+                      {sample.title}
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {sample.filename}
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 shrink-0 ml-1" />
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -289,7 +400,7 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
             </button>
             <button
               onClick={handlePastedTextSubmit}
-              disabled={isProcessing || rawText.trim().length < 30}
+              disabled={isProcessing || rawText.trim().length < 25}
               className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs cursor-pointer shadow-xs transition-colors"
             >
               Analyze Pasted Content
@@ -317,12 +428,12 @@ export const ResumeView: React.FC<ResumeViewProps> = ({
       {errorMessage && (
         <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-600" />
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
             <span>{errorMessage}</span>
           </div>
           <button
             onClick={() => setErrorMessage(null)}
-            className="text-xs font-bold underline cursor-pointer"
+            className="text-xs font-bold underline cursor-pointer ml-2"
           >
             Dismiss
           </button>
